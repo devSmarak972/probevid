@@ -3,10 +3,10 @@ system:
   num_gpus: 1
   port: 12355
 note: ""
-batch_size: 8
+batch_size: 1
 defaults:
   - optimizer: ten_epoch
-  - backbone: dinov2_b14
-  - dataset: nyu
+  - backbone: videomae
+  - dataset: navi
   - probe: depth_dpt
   - _self_

@@ -3,5 +3,5 @@ min_depth: 0.001
 max_depth: 10
 head_type: dpt
 prediction_type: bindepth
-hidden_dim: 512
+hidden_dim: 128
 kernel_size: 3

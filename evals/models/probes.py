@@ -72,8 +72,15 @@ class DepthHead(nn.Module):
 
     def forward(self, feats):
         """Prediction each pixel."""
+        # print(feats.shape)
         feats = self.head(feats)
+        # print(feats.shape)
+        # breakpoint()
+        # del feats
+        # torch.cuda.empty_cache()
         depth = self.predict(feats)
+        # print(depth.shape)
+        # breakpoint()
         return depth
 
 
@@ -84,7 +91,7 @@ class DepthBinPrediction(nn.Module):
         max_depth=10,
         n_bins=256,
         bins_strategy="UD",
-        norm_strategy="linear",
+        norm_strategy="softmax",
     ):
         super().__init__()
         self.n_bins = n_bins
@@ -108,9 +115,17 @@ class DepthBinPrediction(nn.Module):
             prob = torch.relu(prob)
             eps = 0.1
             prob = prob + eps
+            print(prob.shape)
+            breakpoint()
+            prob = prob.half()
             prob = prob / prob.sum(dim=1, keepdim=True)
+            prob = prob.float()
         elif self.norm_strategy == "softmax":
+            # try:
             prob = torch.softmax(prob, dim=1)
+        # except:
+        # print("Memory Usage",prob.numel())
+
         elif self.norm_strategy == "sigmoid":
             prob = torch.sigmoid(prob)
             prob = prob / prob.sum(dim=1, keepdim=True)
@@ -169,14 +184,14 @@ class ResidualConvUnit(nn.Module):
 class DPT(nn.Module):
     def __init__(self, input_dims, output_dim, hidden_dim=512, kernel_size=3):
         super().__init__()
-        assert len(input_dims) == 4
+        # assert len(input_dims) == 4
         self.conv_0 = nn.Conv2d(input_dims[0], hidden_dim, 1, padding=0)
         self.conv_1 = nn.Conv2d(input_dims[1], hidden_dim, 1, padding=0)
-        self.conv_2 = nn.Conv2d(input_dims[2], hidden_dim, 1, padding=0)
-        self.conv_3 = nn.Conv2d(input_dims[3], hidden_dim, 1, padding=0)
+        # self.conv_2 = nn.Conv2d(input_dims[2], hidden_dim, 1, padding=0)
+        # self.conv_3 = nn.Conv2d(input_dims[3], hidden_dim, 1, padding=0)
 
-        self.ref_0 = FeatureFusionBlock(hidden_dim, kernel_size)
-        self.ref_1 = FeatureFusionBlock(hidden_dim, kernel_size)
+        # self.ref_0 = FeatureFusionBlock(hidden_dim, kernel_size)
+        # self.ref_1 = FeatureFusionBlock(hidden_dim, kernel_size)
         self.ref_2 = FeatureFusionBlock(hidden_dim, kernel_size)
         self.ref_3 = FeatureFusionBlock(hidden_dim, kernel_size, with_skip=False)
 
@@ -188,21 +203,23 @@ class DPT(nn.Module):
 
     def forward(self, feats):
         """Prediction each pixel."""
-        assert len(feats) == 4
+        # assert len(feats) == 4
 
         feats[0] = self.conv_0(feats[0])
         feats[1] = self.conv_1(feats[1])
-        feats[2] = self.conv_2(feats[2])
-        feats[3] = self.conv_3(feats[3])
+        # feats[2] = self.conv_2(feats[2])
+        # feats[3] = self.conv_3(feats[3])
 
         feats = [interpolate(x, scale_factor=2) for x in feats]
 
-        out = self.ref_3(feats[3], None)
-        out = self.ref_2(feats[2], out)
-        out = self.ref_1(feats[1], out)
-        out = self.ref_0(feats[0], out)
+        # out = self.ref_3(feats[3], None)
+        # out = self.ref_2(feats[2], out)
+        out = self.ref_3(feats[1], None)
+        out = self.ref_2(feats[0], out)
+        # out = self.ref_1(feats[1], out)
+        # out = self.ref_0(feats[0], out)
 
-        out = interpolate(out, scale_factor=4)
+        out = interpolate(out, scale_factor=2)
         out = self.out_conv(out)
         out = interpolate(out, scale_factor=2)
         return out

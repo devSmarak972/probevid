@@ -23,8 +23,12 @@ SOFTWARE.
 """
 from __future__ import annotations
 
+import gc
+import operator as op
 import os
+from collections import defaultdict
 from datetime import datetime
+from functools import reduce
 from pathlib import Path
 
 import hydra
@@ -33,9 +37,8 @@ import torch.multiprocessing as mp
 from hydra.utils import instantiate
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from torch.autograd import Variable
 from torch.distributed import destroy_process_group, init_process_group
-
-
 from torch.nn.functional import interpolate
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LambdaLR
@@ -45,6 +48,65 @@ from evals.datasets.builder import build_loader
 from evals.utils.losses import DepthLoss
 from evals.utils.metrics import evaluate_depth, match_scale_and_shift
 from evals.utils.optim import cosine_decay_linear_warmup
+
+
+def get_tensor_memory_usage(tensor):
+    return tensor.element_size() * tensor.numel()
+
+
+def print_memory_usage():
+    print(f"Memory Allocated: {torch.cuda.memory_allocated() / (1024 ** 2)} MB")
+    print(f"Memory Cached: {torch.cuda.memory_reserved() / (1024 ** 2)} MB")
+    cnt = 0
+    shape_counts = defaultdict(int)
+
+    for obj in gc.get_objects():
+        try:
+            if torch.is_tensor(obj) or (
+                hasattr(obj, "data") and torch.is_tensor(obj.data)
+            ):
+                # print(obj.size())
+                # if memory_usage ==4816896:
+                cnt += 1
+                shape_counts[obj.size()] += 1
+                memory_usage = get_tensor_memory_usage(obj)
+                print(
+                    f"Tensor size: {obj.size()}, Memory usage: {memory_usage/(1e6)} MB"
+                )
+                # Example: Delete tensors of shape (2, 3)
+                if obj.size() == (1, 128, 64, 147):
+                    # print("deleting......")
+                    obj = None  # This removes the reference to the object
+                    del obj
+                # print(reduce(op.mul, obj.size()) if len(obj.size()) > 0 else 0, type(obj), obj.size())
+        except:
+            pass
+            # print("restricted shared file")
+    # gc.collect()  # Optional: Force garbage collection to reclaim memory
+    print("Num Tensors:", cnt)
+    for shape, count in shape_counts.items():
+        print(f"Shape: {shape}, Count: {count}")
+    # stats = torch.cuda.memory_stats()
+    # for stat in stats:
+    #     print(f"{stat}: {stats[stat]}")
+
+
+def train_probe(probe, scale_invariant, loss_fn, target, feats):
+    pred = probe(feats)
+    pred = interpolate(pred, size=target.shape[-2:], mode="bilinear")
+
+    if scale_invariant:
+        pred = match_scale_and_shift(pred, target)
+        pred = pred.clamp(min=0.001, max=10.0)
+    # print(pred.shape,"predictions shape",target.shape)
+    # target.detach()
+    # pred.detach()
+    loss = loss_fn(pred, target)
+    # loss.detach()
+    # loss = Variable(loss.detach().data, requires_grad=True)
+
+    loss.backward()
+    return loss.item()
 
 
 def ddp_setup(rank: int, world_size: int, port: int):
@@ -78,6 +140,9 @@ def train(
             train_loader.sampler.set_epoch(ep)
 
         train_loss = 0
+        torch.autograd.set_detect_anomaly(True)
+
+        # feats=torch.empty()
         pbar = tqdm(train_loader) if rank == 0 else train_loader
         for i, batch in enumerate(pbar):
             images = batch["image"].to(rank)
@@ -93,20 +158,15 @@ def train(
                         feats = feats.detach()
             else:
                 feats = model(images)
-            pred = probe(feats)
-            pred = interpolate(pred, size=target.shape[-2:], mode="bilinear")
+            #    ----probe trained here--------------
 
-            if scale_invariant:
-                pred = match_scale_and_shift(pred, target)
-                pred = pred.clamp(min=0.001, max=10.0)
-
-            loss = loss_fn(pred, target)
-            loss.backward()
+            loss = train_probe(probe, scale_invariant, loss_fn, target, feats)
+            # feats=feats.detach()
             optimizer.step()
             scheduler.step()
 
             pr_lr = optimizer.param_groups[0]["lr"]
-            loss = loss.item()
+            # loss = loss.detach()
             train_loss += loss
 
             if rank == 0:
@@ -114,6 +174,19 @@ def train(
                 pbar.set_description(
                     f"{ep} | loss: {loss:.4f} ({_loss:.4f}) probe_lr: {pr_lr:.2e}"
                 )
+            if (i % 200) == 0:
+                print("Memory: ")
+                # print(target.numel(),"|",feats.numel(),"|",pred.numel())
+                # print_memory_usage()
+                # print("After:")
+                print_memory_usage()
+                gc.collect()
+                breakpoint()
+                torch.cuda.empty_cache()
+
+                # breakpoint()
+            del target, images, feats, loss
+            # torch.cuda.empty_cache()
 
         train_loss /= len(train_loader)
 
@@ -150,12 +223,7 @@ def validate(
                 pred, target, scale_invariant=scale_invariant
             )
             if metrics is None:
-                metrics = {
-                    key: [
-                        value,
-                    ]
-                    for key, value in batch_metrics.items()
-                }
+                metrics = {key: [value] for key, value in batch_metrics.items()}
             else:
                 for key, value in batch_metrics.items():
                     metrics[key].append(value)
@@ -181,6 +249,7 @@ def train_model(rank, world_size, cfg):
 
     # ===== Get models =====
     model = instantiate(cfg.backbone)
+    print("feat dim:", model.feat_dim)
     probe = instantiate(
         cfg.probe, feat_dim=model.feat_dim, max_depth=trainval_loader.dataset.max_depth
     )

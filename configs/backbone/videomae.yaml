@@ -1,0 +1,5 @@
+_target_: evals.models.video_models.videomae.VideoMaeFT
+model_id: "MCG-NJU/videomae-base"
+time_step: 1
+layer: 1
+output: dense

@@ -1,0 +1,5 @@
+_target_: evals.models.svd.SVD_DIFT
+model_id: "stabilityai/stable-video-diffusion-img2vid-xt"
+time_step: 1
+layer: 1
+output: dense

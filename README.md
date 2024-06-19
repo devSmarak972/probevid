@@ -81,3 +81,17 @@ We would also like to acknowledge the following repositories and users for relea
 code and datasets: 
 
 - [GeoNet](https://github.com/xjqi/GeoNet) for releasing the extracted surface normals for full NYU.  
+# probevid
+precommit-config
+
+  - repo: https://github.com/PyCQA/flake8
+    rev: 4.0.1
+    hooks:
+      - id: flake8
+        additional_dependencies: [flake8-typing-imports==1.12.0]
+        args:
+          # arguments to configure flake8
+          # making isort line length compatible with black
+          - "--max-line-length=88"
+          - "--ignore=E203,E722,E731,W503,E731"
+          - "--max-complexity=18"
