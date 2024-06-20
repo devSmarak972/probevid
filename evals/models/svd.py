@@ -64,5 +64,5 @@ class SVD_DIFT(torch.nn.Module):
             spatial = [x.mean(dim=(2, 3)) for x in spatial]
         elif self.output == "dense":
             spatial = [interpolate(x.contiguous(), (h, w)) for x in spatial]
-
+        # print("shapes...:",spatial[0].shape,spatial[1].shape)
         return spatial[0] if len(spatial) == 1 else spatial

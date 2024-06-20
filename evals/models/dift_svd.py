@@ -16,6 +16,22 @@ from loguru import logger
 from torchvision import transforms
 
 
+def reshape_tensor(tensor):
+    # Combine the first two dimensions (28 and 1280) into one dimension (28 * 1280 = 35840)
+    # combined_dim = tensor.shape[2] * tensor.shape[3]*tensor.shape[0]
+    # reshaped_tensor = tensor.view(combined_dim, tensor.shape[1])
+    # print("Previous shape",tensor.shape)
+    # Reshape to the target shape [1, 128, any, any]
+    new_shape = (
+        1,
+        tensor.shape[1],
+        tensor.shape[2] * int(tensor.shape[0]),
+        tensor.shape[3],
+    )
+    reshaped_tensor = tensor.view(*new_shape)
+    return reshaped_tensor
+
+
 class MyUNet2DConditionModel(UNet2DConditionModel):
     def forward(
         self,
@@ -84,7 +100,7 @@ class SVDFeaturizer(torch.nn.Module):
         onestep_pipe.enable_attention_slicing()
         # onestep_pipe.enable_xformers_memory_efficient_attention()
         self.pipe = onestep_pipe
-
+        self.activations = []
         # self.tokenizer = onestep_pipe.tokenizer
         # self.text_encoder = onestep_pipe.text_encoder
         self.unet = onestep_pipe.unet
@@ -104,6 +120,9 @@ class SVDFeaturizer(torch.nn.Module):
     def attach_hooks(self):
         for idx in self.up_ft_indices:
             handle = self.pipe.unet.up_blocks[idx].register_forward_hook(self.hook_fn)
+            block = self.pipe.unet.up_blocks[idx]
+            # print(f"Upsample Block {idx}/{len(self.pipe.unet.up_blocks)}: {block.__class__.__name__}")
+
             setattr(self, f"hook_handle_{idx}", handle)
 
     def hook_fn(self, module, input, output):
@@ -125,10 +144,12 @@ class SVDFeaturizer(torch.nn.Module):
 			unet_ft: a torch tensor in the shape of [1, c, h, w]
 		"""
         self.up_ft_indices = up_ft_index
-        # self.attach_hooks()
+        self.activations = []
+
+        self.attach_hooks()
 
         device = images.device
-        print(type(images))
+        # print(type(images))
         # Ensure input is a batch of images
         # if images.dim() == 3:  # If single image, add batch dimension
         # images = images.unsqueeze(0)
@@ -145,12 +166,11 @@ class SVDFeaturizer(torch.nn.Module):
         # 	noise = torch.randn_like(latents).to(device)
         # 	latents_noisy = self.scheduler.add_noise(latents, noise, t)
 
-        print(images.shape)
+        # print(images.shape)
         # Define the resize transform
         # resize_transform = transforms.Resize((1024, 576))
 
         # Apply the resize transform to each image in the batch
-        # images = torch.stack([resize_transform(img) for img in images])
         # images = (images - images.min()) / (images.max() - images.min())
         # Define the transform to convert tensors to PIL images
         # to_pil = transforms.ToPILImage()
@@ -159,74 +179,25 @@ class SVDFeaturizer(torch.nn.Module):
         transform = transforms.Compose(
             [transforms.Resize((576, 1024)), transforms.ToPILImage()]
         )
+        images = [transform(img) for img in images]
         # pil_images = [transform(tensor) for tensor in images]
-        tensor = torch.randn(3, 576, 1024)
-        pil_image = transform(tensor)
-        image = load_image(
-            "https://images.pexels.com/photos/139303/pexels-photo-139303.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1"
-        )
-        activations = []
+        # tensor = torch.randn(3, 576, 1024)
+        # pil_image = transform(tensor)
+        # image = load_image(
+        #     "https://images.pexels.com/photos/139303/pexels-photo-139303.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1"
+        # )
         # tensor = torch.rand(3, 576, 1024)
         # to_pil_image = transforms.ToPILImage()
         # pil_image = to_pil_image(tensor)
         # print(np.array(pil_image).shape)
         frames = self.pipe(
-            image, decode_chunk_size=2, generator=self.generator, num_frames=14
+            images, decode_chunk_size=2, generator=self.generator, num_frames=14
         ).frames[0]
-
-        return activations
-
-    # def encode_prompt(self, prompt, device):
-    # 	"""
-    # 	Encodes the prompt into text encoder hidden states.
-
-    # 	Args:
-    # 		 prompt (`str` or `List[str]`, *optional*):
-    # 			prompt to be encoded
-    # 		device: (`torch.device`):
-    # 			torch device
-    # 		num_images_per_prompt (`int`):
-    # 			number of images that should be generated per prompt
-    # 	"""
-    # 	# function of text encoder can correctly access it
-    # text_inputs = self.tokenizer(
-    # 	prompt,
-    # 	padding="max_length",
-    # 	max_length=self.tokenizer.model_max_length,
-    # 	truncation=True,
-    # 	return_tensors="pt",
-    # )
-    # text_input_ids = text_inputs.input_ids
-    # untruncated_ids = self.tokenizer(
-    # 	prompt, padding="longest", return_tensors="pt"
-    # ).input_ids
-
-    # if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(
-    # 	text_input_ids, untruncated_ids
-    # ):
-    # 	removed_text = self.tokenizer.batch_decode(
-    # 		untruncated_ids[:, self.tokenizer.model_max_length - 1 : -1]
-    # 	)
-    # 	logger.warning(
-    # 		"Input truncated because CLIP only handle sequences up to"
-    # 		f" {self.tokenizer.model_max_length} tokens: {removed_text}"
-    # 	)
-
-    # _has_attr_attn = hasattr(self.text_encoder.config, "use_attention_mask")
-    # if _has_attr_attn and self.text_encoder.config.use_attention_mask:
-    # 	attention_mask = text_inputs.attention_mask.to(device)
-    # else:
-    # 	attention_mask = None
-
-    # prompt_embeds = self.text_encoder(
-    # 	text_input_ids.to(device), attention_mask=attention_mask
-    # )
-    # prompt_embeds = prompt_embeds[0]
-
-    # prompt_embeds = prompt_embeds.to(dtype=self.text_encoder.dtype, device=device)
-
-    # bs_embed, seq_len, _ = prompt_embeds.shape
-    # # check if this is needed TODO
-    # prompt_embeds = prompt_embeds.view(bs_embed, seq_len, -1)
-
-    # return prompt_embeds
+        # print("this is the num layers-------------------",len(self.layer_outputs.values()))
+        # print(self.up_ft_indices)
+        # spatial = torch.stack(list(self.layer_outputs.values()))
+        for id, tsr in self.layer_outputs.items():
+            self.layer_outputs[id] = reshape_tensor(tsr)
+            # print( "new shape",self.layer_outputs[id].shape)
+        self.remove_hooks()
+        return list(self.layer_outputs.values())

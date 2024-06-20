@@ -6,7 +6,7 @@ note: ""
 batch_size: 1
 defaults:
   - optimizer: ten_epoch
-  - backbone: videomae
+  - backbone: dift_svd
   - dataset: navi
   - probe: depth_dpt
   - _self_

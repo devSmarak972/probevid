@@ -101,10 +101,11 @@ def train_probe(probe, scale_invariant, loss_fn, target, feats):
     # print(pred.shape,"predictions shape",target.shape)
     # target=target.detach()
     # pred=pred.detach()
+    # print(pred.shape,target.shape)
     # pred.detach()
     loss = loss_fn(pred, target)
     # loss.detach()
-    loss = Variable(loss.detach().data, requires_grad=True)
+    # loss = Variable(loss.detach().data, requires_grad=True)
 
     loss.backward()
     return loss.item()
@@ -160,7 +161,7 @@ def train(
             else:
                 feats = model(images)
             #    ----probe trained here--------------
-
+            # print("feats",feats[0].shape)
             loss = train_probe(probe, scale_invariant, loss_fn, target, feats)
             # feats=feats.detach()
             optimizer.step()
@@ -176,7 +177,7 @@ def train(
                     f"{ep} | loss: {loss:.4f} ({_loss:.4f}) probe_lr: {pr_lr:.2e}"
                 )
             if (i % 200) == 0:
-                print("Memory: ")
+                # print("Memory: ")
                 # print(target.numel(),"|",feats.numel(),"|",pred.numel())
                 # print_memory_usage()
                 # print("After:")
@@ -250,7 +251,7 @@ def train_model(rank, world_size, cfg):
 
     # ===== Get models =====
     model = instantiate(cfg.backbone)
-    print("feat dim:", model.feat_dim)
+    # print("feat dim:", model.feat_dim)
     probe = instantiate(
         cfg.probe, feat_dim=model.feat_dim, max_depth=trainval_loader.dataset.max_depth
     )
