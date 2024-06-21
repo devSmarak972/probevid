@@ -187,11 +187,11 @@ class DPT(nn.Module):
         # assert len(input_dims) == 4
         self.conv_0 = nn.Conv2d(input_dims[0], hidden_dim, 1, padding=0)
         self.conv_1 = nn.Conv2d(input_dims[1], hidden_dim, 1, padding=0)
-        # self.conv_2 = nn.Conv2d(input_dims[2], hidden_dim, 1, padding=0)
-        # self.conv_3 = nn.Conv2d(input_dims[3], hidden_dim, 1, padding=0)
+        self.conv_2 = nn.Conv2d(input_dims[2], hidden_dim, 1, padding=0)
+        self.conv_3 = nn.Conv2d(input_dims[3], hidden_dim, 1, padding=0)
 
-        # self.ref_0 = FeatureFusionBlock(hidden_dim, kernel_size)
-        # self.ref_1 = FeatureFusionBlock(hidden_dim, kernel_size)
+        self.ref_0 = FeatureFusionBlock(hidden_dim, kernel_size)
+        self.ref_1 = FeatureFusionBlock(hidden_dim, kernel_size)
         self.ref_2 = FeatureFusionBlock(hidden_dim, kernel_size)
         self.ref_3 = FeatureFusionBlock(hidden_dim, kernel_size, with_skip=False)
 
@@ -207,17 +207,17 @@ class DPT(nn.Module):
 
         feats[0] = self.conv_0(feats[0])
         feats[1] = self.conv_1(feats[1])
-        # feats[2] = self.conv_2(feats[2])
-        # feats[3] = self.conv_3(feats[3])
+        feats[2] = self.conv_2(feats[2])
+        feats[3] = self.conv_3(feats[3])
 
         feats = [interpolate(x, scale_factor=2) for x in feats]
 
-        # out = self.ref_3(feats[3], None)
-        # out = self.ref_2(feats[2], out)
-        out = self.ref_3(feats[1], None)
-        out = self.ref_2(feats[0], out)
-        # out = self.ref_1(feats[1], out)
-        # out = self.ref_0(feats[0], out)
+        out = self.ref_3(feats[3], None)
+        out = self.ref_2(feats[2], out)
+        # out = self.ref_3(feats[1], None)
+        # out = self.ref_2(feats[0], out)
+        out = self.ref_1(feats[1], out)
+        out = self.ref_0(feats[0], out)
 
         out = interpolate(out, scale_factor=2)
         out = self.out_conv(out)

@@ -161,7 +161,8 @@ def train(
             else:
                 feats = model(images)
             #    ----probe trained here--------------
-            # print("feats",feats[0].shape)
+            # print("feats",type(feats),feats.shape)
+            feats = feats.to(rank)
             loss = train_probe(probe, scale_invariant, loss_fn, target, feats)
             # feats=feats.detach()
             optimizer.step()
@@ -176,10 +177,11 @@ def train(
                 pbar.set_description(
                     f"{ep} | loss: {loss:.4f} ({_loss:.4f}) probe_lr: {pr_lr:.2e}"
                 )
+            feats = feats.detach().cpu()
             if (i % 200) == 0:
-                # print("Memory: ")
+                print("Memory: ")
                 # print(target.numel(),"|",feats.numel(),"|",pred.numel())
-                # print_memory_usage()
+                print_memory_usage()
                 # print("After:")
                 # print_memory_usage()
                 gc.collect()

@@ -33,9 +33,9 @@ class VideoMaeFT(torch.nn.Module):
 
         # feat_dims = [1280, 1280, 640, 320]
         multilayers = [0, 1, 2, 3]
-        self.multilayers = multilayers[:2]
+        self.multilayers = multilayers[:4]
         # self.feat_dim=[self.model.config.hidden_size]*4
-        self.feat_dim = [128] * 2
+        self.feat_dim = [128] * 4
         # if return_multilayer:
         #     self.feat_dim = feat_dims
         #     self.multilayers = multilayers
@@ -99,8 +99,9 @@ class VideoMaeFT(torch.nn.Module):
         # spatial = [spatial[i].squeeze().transpose(0, 1) for i in self.multilayers]
         spatial = [spatial[i] for i in self.multilayers]
         spatial = torch.stack(spatial)
+        spatial = spatial.detach().cpu()
         # spatial = spatial.permute(0, 3, 1, 2)
-        spatial = spatial.reshape(2, batch_size, 128, 64, 147)
+        spatial = spatial.reshape(len(self.multilayers), batch_size, 128, 64, 147)
 
         # print(spatial.shape,"spatial")
         # spatial = spatial.squeeze(1).squeeze(1)
