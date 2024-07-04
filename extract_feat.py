@@ -37,12 +37,13 @@ import torch.multiprocessing as mp
 from hydra.utils import instantiate
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from PIL import Image
 from torch.autograd import Variable
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.functional import interpolate
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.tensorboard import SummaryWriter
+from torchvision import transforms
 from tqdm import tqdm
 
 from evals.datasets.builder import build_loader
@@ -124,100 +125,117 @@ def ddp_setup(rank: int, world_size: int, port: int):
     torch.cuda.set_device(rank)
 
 
-def train(
-    model,
-    probe,
-    train_loader,
-    optimizer,
-    scheduler,
-    n_epochs,
-    detach_model,
-    loss_fn,
-    rank=0,
-    world_size=1,
-    valid_loader=None,
-    scale_invariant=False,
-    writer=None,
-):
-    for ep in range(n_epochs):
-        if world_size > 1:
-            train_loader.sampler.set_epoch(ep)
+def extract(model, input_folder, output_folder, detach_model, rank=0, world_size=1):
 
-        train_loss = 0
-        torch.autograd.set_detect_anomaly(True)
+    # feats=torch.empty()
+    transform = transforms.Compose(
+        [transforms.ToTensor()]  # Convert the image to a tensor
+    )  # Create output folder if it doesn't exist
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
 
-        # feats=torch.empty()
-        pbar = tqdm(train_loader) if rank == 0 else train_loader
-        running_loss = 0.0
+    input_folder = os.path.abspath(input_folder)
+    # phase_output_folder = os.path.abspath(output_folder)
+    # phase_input_folder = os.path.join(phase_input_folder, phase)
+    # phase_output_folder = os.path.join(phase_output_folder, phase)
+    # print(phase_output_folder)
 
-        for i, batch in enumerate(pbar):
-            images = batch["image"].to(rank)
-            target = batch["depth"].to(rank)
+    for dir in tqdm(os.listdir(input_folder), desc=f"Processing images"):
+        subfolder_path = os.path.join(input_folder, dir)
+        # print(dir)
+        for tdir in os.listdir(subfolder_path):
+            if "3d_scan" in tdir:
+                continue
+            spath = os.path.join(subfolder_path, tdir, "images")
+            if not os.path.exists(spath):
+                continue
+            for file in os.listdir(spath):
 
-            optimizer.zero_grad()
-            if detach_model:
-                with torch.no_grad():
-                    feats = model(images)
-                    if isinstance(feats, (tuple, list)):
-                        feats = [_f.detach() for _f in feats]
+                # print(file)
+                if file.endswith(".jpg"):
+                    img_path = os.path.join(spath, file)
+
+                    img = Image.open(img_path).convert("RGB")
+                    img = transform(img).unsqueeze(0)
+                    # print(img.shape)
+                    img = img.to(rank)
+
+                    if detach_model:
+                        with torch.no_grad():
+                            feats = model(img)
+                            if isinstance(feats, (tuple, list)):
+                                feats = [_f.detach() for _f in feats]
+                            else:
+                                feats = feats.detach()
                     else:
-                        feats = feats.detach()
-            else:
-                feats = model(images)
-            #    ----probe trained here--------------
-            # print("feats",len(feats),feats[0].shape)
-            # feats = feats.to(rank)
+                        feats = model(img)
+                    # print(output.shape)
+                    # Create corresponding output subfolder structure
+                    # relative_path = os.path.relpath(subfolder_path, phase_input_folder)
+                    output_subfolder = os.path.join(output_folder, dir, tdir)
+                    # print(output_subfolder)
+                    if not os.path.exists(output_subfolder):
+                        os.makedirs(output_subfolder)
 
-            loss = train_probe(probe, scale_invariant, loss_fn, target, feats)
-            # feats=feats.detach()
-            optimizer.step()
-            scheduler.step()
+                    output_filename = os.path.splitext(file)[0] + ".pt"
+                    output_filepath = os.path.join(output_subfolder, output_filename)
+                    torch.save(feats, output_filepath)
+    print(f"Processed and saved")
 
-            pr_lr = optimizer.param_groups[0]["lr"]
-            # loss = loss.detach()
-            train_loss += loss
 
-            if rank == 0:
-                _loss = train_loss / (i + 1)
-                pbar.set_description(
-                    f"{ep} | loss: {loss:.4f} ({_loss:.4f}) probe_lr: {pr_lr:.2e}"
-                )
-            # feats = feats.detach().cpu()
-            running_loss += loss
-            if (i % 100) == 0:
-                # print("Memory: ")
+def extract_old(model, input_folder, output_folder, detach_model, rank=0, world_size=1):
 
-                if writer is not None:
-                    writer.add_scalar(
-                        "training loss", running_loss / 100, ep * len(train_loader) + i
-                    )
-                    running_loss = 0.0
+    # feats=torch.empty()
+    transform = transforms.Compose(
+        [transforms.ToTensor()]  # Convert the image to a tensor
+    )  # Create output folder if it doesn't exist
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
 
-                # print(target.numel(),"|",feats.numel(),"|",pred.numel())
-                # print_memory_usage()
-                # print("After:")
-                # print_memory_usage()
-                gc.collect()
-                # breakpoint()
-                torch.cuda.empty_cache()
+    for phase in ["train", "val"]:
+        phase_input_folder = os.path.abspath(input_folder)
+        phase_output_folder = os.path.abspath(output_folder)
+        phase_input_folder = os.path.join(phase_input_folder, phase)
+        phase_output_folder = os.path.join(phase_output_folder, phase)
+        print(phase_output_folder)
 
-                # breakpoint()
-            del target, images, feats, loss
-            # torch.cuda.empty_cache()
+        for dir in tqdm(
+            os.listdir(phase_input_folder), desc=f"Processing {phase} images"
+        ):
+            subfolder_path = os.path.join(phase_input_folder, dir)
+            # print(dir)
+            for file in os.listdir(subfolder_path):
 
-        train_loss /= len(train_loader)
+                # print(file)
+                if file.endswith(".jpg"):
+                    img_path = os.path.join(subfolder_path, file)
 
-        if rank == 0:
-            logger.info(f"train loss {ep}   | {train_loss:.4f}")
-            if valid_loader is not None:
-                val_loss, val_metrics = validate(
-                    model, probe, valid_loader, loss_fn, scale_invariant=scale_invariant
-                )
-                if writer is not None:
-                    writer.add_scalar("val loss", val_loss, ep)
-                logger.info(f"valid loss {ep}   | {val_loss:.4f}")
-                for metric in val_metrics:
-                    logger.info(f"valid SA {metric:10s} | {val_metrics[metric]:.4f}")
+                    img = Image.open(img_path).convert("RGB")
+                    img = transform(img).unsqueeze(0)
+                    # print(img.shape)
+                    img = img.to(rank)
+
+                    if detach_model:
+                        with torch.no_grad():
+                            feats = model(img)
+                            if isinstance(feats, (tuple, list)):
+                                feats = [_f.detach() for _f in feats]
+                            else:
+                                feats = feats.detach()
+                    else:
+                        feats = model(img)
+                    # print(output.shape)
+                    # Create corresponding output subfolder structure
+                    # relative_path = os.path.relpath(subfolder_path, phase_input_folder)
+                    output_subfolder = os.path.join(phase_output_folder, dir)
+                    # print(output_subfolder)
+                    if not os.path.exists(output_subfolder):
+                        os.makedirs(output_subfolder)
+
+                    output_filename = os.path.splitext(file)[0] + ".pt"
+                    output_filepath = os.path.join(output_subfolder, output_filename)
+                    torch.save(feats, output_filepath)
+        print(f"Processed and saved: {phase}")
 
 
 def validate(
@@ -262,48 +280,36 @@ def train_model(rank, world_size, cfg):
 
     # ===== GET DATA LOADERS =====
     # validate and test on single gpu
-    trainval_loader = build_loader(cfg.dataset, "trainval", cfg.batch_size, world_size)
-    test_loader = build_loader(cfg.dataset, "test", cfg.batch_size, 1)
-    trainval_loader.dataset.__getitem__(0)
+    # trainval_loader = build_loader(cfg.dataset, "trainval", cfg.batch_size, world_size)
+    # test_loader = build_loader(cfg.dataset, "test", cfg.batch_size, 1)
+    # trainval_loader.dataset.__getitem__(0)
 
     # ===== Get models =====
     model = instantiate(cfg.backbone)
     # print("feat dim:", model.feat_dim)
-    if type(model.feat_dim) is not list:
-        feat_dim = [model.feat_dim] * 4
-    else:
-        feat_dim = model.feat_dim
-    # print(feat_dim)
-    probe = instantiate(
-        cfg.probe, feat_dim=feat_dim, max_depth=trainval_loader.dataset.max_depth
-    )
 
     # setup experiment name
     # === job info
     timestamp = datetime.now().strftime("%d%m%Y-%H%M")
-    train_dset = trainval_loader.dataset.name
-    test_dset = test_loader.dataset.name
+
     model_info = [
         f"{model.checkpoint_name:40s}",
         f"{model.patch_size:2d}",
         f"{str(model.layer):5s}",
         f"{model.output:10s}",
     ]
-    probe_info = [f"{probe.name:25s}"]
-    batch_size = cfg.batch_size * cfg.system.num_gpus
-    train_info = [
-        f"{cfg.optimizer.n_epochs:3d}",
-        f"{cfg.optimizer.warmup_epochs:4.2f}",
-        f"{str(cfg.optimizer.probe_lr):>10s}",
-        f"{str(cfg.optimizer.model_lr):>10s}",
-        f"{batch_size:4d}",
-        f"{train_dset:10s}",
-        f"{test_dset:10s}",
-    ]
-    # writer = SummaryWriter(f"runs/experiment_{model_name}_{test_dset}_{train_dset}")
+    # train_info = [
+    #     f"{cfg.optimizer.n_epochs:3d}",
+    #     f"{cfg.optimizer.warmup_epochs:4.2f}",
+    #     f"{str(cfg.optimizer.probe_lr):>10s}",
+    #     f"{str(cfg.optimizer.model_lr):>10s}",
+    #     f"{batch_size:4d}",
+    #     f"{train_dset:10s}",
+    #     f"{test_dset:10s}",
+    # ]
 
     # define exp_name
-    exp_name = "_".join([timestamp] + model_info + probe_info + train_info)
+    exp_name = "_".join([timestamp] + model_info + ["extraction"])
     exp_name = f"{exp_name}_{cfg.note}" if cfg.note != "" else exp_name
     exp_name = exp_name.replace(" ", "")  # remove spaces
 
@@ -311,100 +317,41 @@ def train_model(rank, world_size, cfg):
     if rank == 0:
         exp_path = Path(__file__).parent / f"depth_exps/{exp_name}"
         exp_path.mkdir(parents=True, exist_ok=True)
-        logger.add(exp_path / "training.log")
+        logger.add(exp_path / "extraction.log")
         logger.info(f"Config: \n {OmegaConf.to_yaml(cfg)}")
 
     # move to cuda
     model = model.to(rank)
-    probe = probe.to(rank)
 
     # very hacky ... SAM gets some issues with DDP finetuning
-    model_name = model.checkpoint_name
-    if "sam" in model_name or "vit-mae" in model_name:
-        h, w = trainval_loader.dataset.e__getitem__(0)["image"].shape[-2:]
-        model.resize_pos_embed(image_size=(h, w))
-
-    writer = SummaryWriter(f"runs/experiment_{model_name}_{test_dset}_{train_dset}")
+    print(cfg)
+    model_name = cfg.data.model_name
+    # if "sam" in model_name or "vit-mae" in model_name:
+    #     h, w = trainval_loader.dataset.__getitem__(0)["image"].shape[-2:]
+    #     model.resize_pos_embed(image_size=(h, w))
 
     # move to DDP
     if world_size > 1:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)
-        probe = DDP(probe, device_ids=[rank])
+        # probe = DDP(probe, device_ids=[rank])
 
-    if cfg.optimizer.model_lr == 0:
-        optimizer = torch.optim.AdamW(
-            [{"params": probe.parameters(), "lr": cfg.optimizer.probe_lr}]
-        )
-    else:
-        optimizer = torch.optim.AdamW(
-            [
-                {"params": probe.parameters(), "lr": cfg.optimizer.probe_lr},
-                {"params": model.parameters(), "lr": cfg.optimizer.model_lr},
-            ]
-        )
-
-    lambda_fn = lambda epoch: cosine_decay_linear_warmup(  # noqa: E731
-        epoch,
-        cfg.optimizer.n_epochs * len(trainval_loader),
-        cfg.optimizer.warmup_epochs * len(trainval_loader),
-    )
-    scheduler = LambdaLR(optimizer, lr_lambda=lambda_fn)
-    loss_fn = DepthLoss()
-
-    train(
+    extract(
         model,
-        probe,
-        trainval_loader,
-        optimizer,
-        scheduler,
-        cfg.optimizer.n_epochs,
-        detach_model=(cfg.optimizer.model_lr == 0),
-        loss_fn=loss_fn,
+        cfg.data.input_folder,
+        cfg.data.output_folder + "/" + str(model_name),
+        detach_model=True,
         rank=rank,
         world_size=world_size,
-        writer=writer
         # valid_loader=test_loader,
     )
-    writer.close()
-    if rank == 0:
-        logger.info(f"Evaluating on test split of {test_dset}")
-
-        test_sa_loss, test_sa_metrics = validate(model, probe, test_loader, loss_fn)
-        logger.info(f"Scale-Aware Final test loss       | {test_sa_loss:.4f}")
-        for metric in test_sa_metrics:
-            logger.info(f"Final test SA {metric:10s} | {test_sa_metrics[metric]:.4f}")
-        results_sa = ", ".join([f"{test_sa_metrics[_m]:.4f}" for _m in test_sa_metrics])
-
-        # get scale invariant
-        test_si_loss, test_si_metrics = validate(
-            model, probe, test_loader, loss_fn, scale_invariant=True
-        )
-        logger.info(f"Scale-Invariant Final test loss       | {test_si_loss:.4f}")
-        for metric in test_si_metrics:
-            logger.info(f"Final test SI {metric:10s} | {test_si_metrics[metric]:.4f}")
-        results_si = ", ".join([f"{test_si_metrics[_m]:.4f}" for _m in test_si_metrics])
-
-        # log experiments
-        exp_info = ", ".join(model_info + probe_info + train_info)
-        log = f"{timestamp}, {exp_info}, SA_results(d1,d2,d3,rmse): {results_sa}, SI_results(d1,d2,d3,rmse) {results_si} \n"
-        with open(f"depth_results_{test_dset}.log", "a") as f:
-            f.write(log)
-
-        # save final model
-        ckpt_path = exp_path / "ckpt.pth"
-        checkpoint = {
-            "cfg": cfg,
-            "model": model.state_dict(),
-            "probe": probe.state_dict(),
-        }
-        torch.save(checkpoint, ckpt_path)
-        logger.info(f"Saved checkpoint at {ckpt_path}")
 
     if world_size > 1:
         destroy_process_group()
 
 
-@hydra.main(config_name="depth_training", config_path="./configs", version_base=None)
+@hydra.main(
+    config_name="feature_extraction", config_path="./configs", version_base=None
+)
 def main(cfg: DictConfig):
     world_size = cfg.system.num_gpus
     if world_size > 1:

@@ -1,0 +1,19 @@
+system:
+  random_seed: 8
+  num_gpus: 1
+  port: 12355
+note: ""
+data:
+  input_folder: data/navi_v1
+  output_folder: data/navi_feats
+  model_name: videomae
+model:
+  feat_dim: [128,128,128,128]
+  feat_size: 128
+batch_size: 1
+defaults:
+  - optimizer: ten_epoch
+  - backbone: videomae
+  - dataset: navi_feats
+  - probe: depth_dpt
+  - _self_

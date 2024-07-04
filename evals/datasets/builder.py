@@ -34,12 +34,12 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 torch.multiprocessing.set_sharing_strategy("file_system")
 
 
-def build_loader(cfg, split, batch_size, num_gpus=1, **kwargs):
+def build_loader(cfg, split, batch_size, num_gpus=1, model_name="videomae", **kwargs):
     """
     Build a PyTorch dataloader and the underlying dataset (using config).
     """
     # Build a dataset from the provided dataset config.
-    dataset = instantiate(cfg, split=split, **kwargs)
+    dataset = instantiate(cfg, split=split, model_name=model_name, **kwargs)
 
     use_ddp = num_gpus > 1
     sampler = DistributedSampler(dataset) if use_ddp else None

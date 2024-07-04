@@ -1,17 +1,26 @@
+import os
+
 import numpy as np
 import requests
 import torch
 import torch.nn.functional as F
 from PIL import Image
 from torch.nn.functional import interpolate
+from torchvision import transforms
+from torchvision.io import read_video, read_video_timestamps
 from torchvision.transforms import Compose, Resize, ToPILImage, ToTensor
 from transformers import VideoMAEFeatureExtractor, VideoMAEModel
 
+from .videogpt import load_vqvae
+from .videogpt.data import preprocess
 
-class VideoMaeFT(torch.nn.Module):
+# img_path="00_002.jpg"
+
+
+class VideoGPTFT(torch.nn.Module):
     def __init__(
         self,
-        model_id="MCG-NJU/videomae-base",
+        model_id="kinetics_stride2x4x4",
         output="dense",
         time_step=250,
         layer=1,
@@ -21,15 +30,15 @@ class VideoMaeFT(torch.nn.Module):
         assert output in ["gap", "dense"], "Only supports gap or dense output"
 
         self.output = output
-        self.checkpoint_name = model_id.split("/")[1] + f"_noise-{time_step}"
+        self.checkpoint_name = model_id + f"_noise-{time_step}"
         self.patch_size = 16
         self.timestep = time_step
-        self.up_ft_index = [0, 1, 2, 3]  # keep all the upblock feats
         assert layer in [-1, 0, 1, 2, 3]
-        self.model = VideoMAEModel.from_pretrained("MCG-NJU/videomae-base")
-        self.feature_extractor = VideoMAEFeatureExtractor.from_pretrained(
-            "MCG-NJU/videomae-base"
-        )
+        self.sequence_length = 1
+        self.resolution = 128
+        self.device = torch.device("cuda")
+
+        self.model = load_vqvae("kinetics_stride2x4x4").to(self.device)
 
         # feat_dims = [1280, 1280, 640, 320]
         multilayers = [0, 1, 2, 3]
@@ -76,35 +85,25 @@ class VideoMaeFT(torch.nn.Module):
         spatial = []
         batch_size = images.shape[0]
 
-        pixels = self.process_images(images, 16)
-        # List to hold the series of PIL images for each batch
-        # batch_of_series_of_pil_images = []
-        # frames=torch.empty((len(images),16,3,224,224))
-        i = 0
+        transform = transforms.Compose(
+            [
+                transforms.Resize(
+                    (128, 128)
+                ),  # Resize the image to match the resolution
+                # transforms.ToTensor(),  # Convert the image to a tensor
+            ]
+        )
 
-        # frames_final=np.array(frames_final)
-
-        # print(images.shape)
-
-        # features = self.feature_extractor.preprocess(images,return_tensors="pt")
-        # print(type(features),len(features))
-        # handle prompts
-
-        spatial = self.model(pixel_values=pixels, output_hidden_states=True)
-        del pixels
-        spatial = spatial.hidden_states
-        # Remove the extra dimensions and transpose
-
-        h, w = images.shape[2] // self.patch_size, images.shape[3] // self.patch_size
-        # spatial = [spatial[i].squeeze().transpose(0, 1) for i in self.multilayers]
-        spatial = [spatial[i] for i in self.multilayers]
-        spatial = torch.stack(spatial)
-        spatial = spatial.reshape(len(self.multilayers), batch_size, 128, 64, 147)
-        # spatial = spatial.detach().cpu()
-        spatial = [s for s in spatial]
-        # spatial = spatial.permute(0, 3, 1, 2)
-
-        # print(spatial.shape,"spatial")
-        # spatial = spatial.squeeze(1).squeeze(1)
-
-        return spatial[0] if len(spatial) == 1 else spatial
+        img = images[0]
+        img_tensor = (
+            transform(img).unsqueeze(0).to(self.device)
+        )  # Add batch dimension and move to GPU
+        img_tensor = img_tensor.permute(0, 2, 3, 1)
+        pixels = preprocess(img_tensor, self.resolution, self.sequence_length).to(
+            self.device
+        )
+        pixels = pixels.repeat(1, 4, 1, 1).unsqueeze(0)
+        # print(pixels.shape)
+        pixels = pixels.to(self.device)
+        encodings = self.model.encode(pixels)
+        return encodings

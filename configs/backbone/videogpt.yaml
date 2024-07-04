@@ -1,0 +1,5 @@
+_target_: evals.models.video_models.videoGPT.VideoGPTFT
+model_id: "kinetics_stride2x4x4"
+time_step: 1
+layer: 1
+output: dense

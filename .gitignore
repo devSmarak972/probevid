@@ -2,7 +2,7 @@ outputs
 data
 depth_exps
 snorm_exps
-
+runs
 # vim
 .*.swp
 

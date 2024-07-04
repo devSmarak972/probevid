@@ -3,3 +3,4 @@ dino_name: dinov2
 model_name: vitb14_reg
 output: dense-cls
 layer: -1
+return_multilayer: True

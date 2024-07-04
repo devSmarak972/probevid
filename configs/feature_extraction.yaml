@@ -2,11 +2,15 @@ system:
   random_seed: 8
   num_gpus: 1
   port: 12355
+data:
+  input_folder: data/navi_v1
+  output_folder: data/navi_feats
+  model_name: videomae
 note: ""
 batch_size: 1
 defaults:
   - optimizer: ten_epoch
-  - backbone: dinov2_b14_reg
+  - backbone: videmae
   - dataset: navi
   - probe: depth_dpt
   - _self_

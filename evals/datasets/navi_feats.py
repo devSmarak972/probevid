@@ -44,6 +44,7 @@ class NAVI(torch.utils.data.Dataset):
     def __init__(
         self,
         path,
+        img_path,
         split="train",
         model="all",
         image_mean="imagenet",
@@ -74,7 +75,8 @@ class NAVI(torch.utils.data.Dataset):
             raise ValueError(f"Unknown split: {split}")
 
         # set path
-        self.data_root = Path(path)
+        self.data_root = Path(path + "/" + model_name)
+        self.img_root = Path(img_path)
         self.bbox_crop = bbox_crop
         self.relative_depth = relative_depth
         self.max_depth = 1.0
@@ -143,9 +145,12 @@ class NAVI(torch.utils.data.Dataset):
 
         # get scene path
         prefix = "downsampled_"
-        scene_path = self.data_root / obj_id / scene_id
+        scene_path = self.img_root / obj_id / scene_id
+        feat_path = self.data_root / obj_id / scene_id
         image_path = scene_path / f"images/{prefix}{img_id}.jpg"
         depth_path = scene_path / f"depth/{prefix}{img_id}.png"
+        with torch.no_grad():
+            feats = torch.load(feat_path / f"{img_id}.pt", map_location="cpu")
 
         # get image
         image = read_image(image_path)
@@ -222,6 +227,7 @@ class NAVI(torch.utils.data.Dataset):
         # image = (image * mask) + torch.ones_like(image) * (1 - mask)
 
         return {
+            "feats": feats,
             "image": image,
             "depth": depth,
             "class_id": obj_number,
@@ -249,16 +255,18 @@ class NAVI(torch.utils.data.Dataset):
         # parse image folders
         for collection_path in all_collections:
             object_id, collection_id = collection_path.split("/")[-2:]
-
+            img_collection_path = os.path.join(self.img_root, object_id, collection_id)
             # get image ids
-            img_files = os.listdir(os.path.join(collection_path, "images"))
-            img_ids = [_file.split(".")[0] for _file in img_files if "jpg" in _file]
+            pt_files = os.listdir(collection_path)
+
+            img_ids = [_file.split(".")[0] for _file in pt_files if "pt" in _file]
 
             # VERY hacky | remove small_
             img_ids = [_id for _id in img_ids if "_" not in _id]
 
+            # print(object_id,collection_id,collection_path)
             # load annotations and convert them to a dictionary
-            with open(os.path.join(collection_path, "annotations.json")) as f:
+            with open(os.path.join(img_collection_path, "annotations.json")) as f:
                 annotations = json.load(f)
                 annotations = {
                     _an["filename"].split(".")[0]: _an for _an in annotations
