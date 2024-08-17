@@ -5,12 +5,14 @@ system:
 data:
   input_folder: data/navi_v1
   output_folder: data/navi_feats
-  model_name: videomae
+  model_name: videogpt
+  hidden_dim: 128
+  feat_size: 64
 note: ""
 batch_size: 1
 defaults:
   - optimizer: ten_epoch
-  - backbone: videmae
+  - backbone: videogpt
   - dataset: navi
   - probe: depth_dpt
   - _self_

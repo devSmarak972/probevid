@@ -32,6 +32,7 @@ from functools import reduce
 from pathlib import Path
 
 import hydra
+import numpy as np
 import torch
 import torch.multiprocessing as mp
 from hydra.utils import instantiate
@@ -42,6 +43,7 @@ from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.functional import interpolate
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LambdaLR
+from torch.utils.data import DataLoader, Dataset, Subset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -139,6 +141,20 @@ def train(
     scale_invariant=False,
     writer=None,
 ):
+    dataset = train_loader.dataset
+
+    # Calculate the number of samples for 20% of the data
+    num_samples = int(0.2 * len(dataset))
+    indices = np.random.choice(len(dataset), num_samples, replace=False)
+    dataset = Subset(dataset, indices)
+    train_loader = DataLoader(
+        dataset,
+        batch_size=train_loader.batch_size,
+        shuffle=True,
+        num_workers=train_loader.num_workers,
+        pin_memory=train_loader.pin_memory,
+    )
+
     for ep in range(n_epochs):
         if world_size > 1:
             train_loader.sampler.set_epoch(ep)

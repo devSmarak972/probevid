@@ -34,6 +34,7 @@ from pathlib import Path
 import hydra
 import torch
 import torch.multiprocessing as mp
+import torch.nn.functional as F
 from hydra.utils import instantiate
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
@@ -54,6 +55,105 @@ from evals.utils.optim import cosine_decay_linear_warmup
 
 def get_tensor_memory_usage(tensor):
     return tensor.element_size() * tensor.numel()
+
+
+def interpolate_to_fixed_4d_list(tensors, target_shape=(1, 128, 64, 64)):
+    """
+    Interpolates 2D, 3D, or 4D tensors in a list to a fixed list of 4 4D tensors of shape (1, 128, 64, 64).
+
+    Args:
+    - tensors (list of torch.Tensor): List of input tensors to interpolate.
+    - target_shape (tuple): Desired shape for the output tensors (1, 128, 64, 64).
+
+    Returns:
+    - list of torch.Tensor: Interpolated tensors, a list of 4 tensors each with shape (1, 128, 64, 64).
+    """
+    # Ensure tensors is a list of tensors
+    if isinstance(tensors, torch.Tensor):
+        tensors = [tensors]
+    elif isinstance(tensors, list):
+        if not all(isinstance(t, torch.Tensor) for t in tensors):
+            raise ValueError("If tensors is a list, all elements must be torch.Tensor.")
+    else:
+        raise TypeError(
+            "Input tensors must be a torch.Tensor or a list of torch.Tensor."
+        )
+
+    interpolated_tensors = []
+    # print(len(tensors))
+    for tensor in tensors:
+        # Determine number of spatial dimensions (2D, 3D, or 4D)
+        input_dims = tensor.dim()
+        spatial_dims = input_dims - 1
+        # print("tensor shape",tensor.shape)
+        # Validate input dimensions and target shape
+
+        # Reshape tensor to combine batch and channel dimensions for interpolation
+
+        if input_dims < 3 or input_dims > 5:
+            raise ValueError("Input tensors must have 2, 3, or 4 dimensions.")
+        # if len(target_shape) != 3:
+        #     raise ValueError("Target shape must be (1, 128, 64, 64) for interpolation.")
+
+        if spatial_dims == 2:
+            # 2D to 4D (bilinear interpolation)
+            # print(tensor.unsqueeze(0).unsqueeze(0).shape)
+            tsr = []
+            for batch in tensor:
+                interpolated_tensor = F.interpolate(
+                    batch.unsqueeze(0).unsqueeze(0).unsqueeze(0),
+                    size=target_shape,
+                    mode="trilinear",
+                    align_corners=False,
+                )
+                tsr.append(interpolated_tensor)
+            interpolated_tensor = torch.stack(tsr)
+
+            # interpolated_tensor = interpolated_tensor
+
+        elif spatial_dims == 3:
+            # 3D to 4D (trilinear interpolation)
+            tsr = []
+            for batch in tensor:
+                interpolated_tensor = F.interpolate(
+                    batch.unsqueeze(0).unsqueeze(0),
+                    size=target_shape,
+                    mode="trilinear",
+                    align_corners=False,
+                )
+                tsr.append(interpolated_tensor)
+            interpolated_tensor = torch.stack(tsr)
+            # interpolated_tensor = interpolated_tensor
+
+        elif spatial_dims == 4:
+            # print(tensor.shape,"here")
+            tsr = []
+            for batch in tensor:
+                # Already 4D, resize using trilinear interpolation
+
+                interpolated_tensor = F.interpolate(
+                    batch.unsqueeze(0),
+                    size=target_shape,
+                    mode="trilinear",
+                    align_corners=False,
+                )
+                tsr.append(interpolated_tensor)
+            interpolated_tensor = torch.stack(tsr)
+
+        else:
+            raise ValueError("Input tensors must have 2, 3, or 4 dimensions.")
+
+        interpolated_tensors.append(interpolated_tensor)
+
+    # If there are fewer than 4 tensors, repeat the existing tensors until there are 4
+    while len(interpolated_tensors) < 4:
+        interpolated_tensors.append(interpolated_tensors[-1].clone())
+
+    # If there are more than 4 tensors, take only the first 4
+    interpolated_tensors = interpolated_tensors[:4]
+    if interpolated_tensors[0].dim() > 4:
+        interpolated_tensors = [f.squeeze(1).squeeze(1) for f in interpolated_tensors]
+    return interpolated_tensors
 
 
 def print_memory_usage():
@@ -125,8 +225,16 @@ def ddp_setup(rank: int, world_size: int, port: int):
     torch.cuda.set_device(rank)
 
 
-def extract(model, input_folder, output_folder, detach_model, rank=0, world_size=1):
-
+def extract(
+    model,
+    input_folder,
+    output_folder,
+    detach_model,
+    rank=0,
+    world_size=1,
+    hidden_dim=128,
+    feat_size=64,
+):
     # feats=torch.empty()
     transform = transforms.Compose(
         [transforms.ToTensor()]  # Convert the image to a tensor
@@ -169,6 +277,14 @@ def extract(model, input_folder, output_folder, detach_model, rank=0, world_size
                                 feats = feats.detach()
                     else:
                         feats = model(img)
+                    print(len(feats))
+                    feats = [f.to(rank).float() for f in feats]
+                    print("Before: ", feats[0].shape)
+                    feats = interpolate_to_fixed_4d_list(
+                        feats, (hidden_dim, feat_size, feat_size)
+                    )
+                    print("After: ", feats[0].shape)
+
                     # print(output.shape)
                     # Create corresponding output subfolder structure
                     # relative_path = os.path.relpath(subfolder_path, phase_input_folder)
@@ -342,6 +458,8 @@ def train_model(rank, world_size, cfg):
         detach_model=True,
         rank=rank,
         world_size=world_size,
+        hidden_dim=cfg.data.hidden_dim,
+        feat_size=cfg.data.feat_size,
         # valid_loader=test_loader,
     )
 

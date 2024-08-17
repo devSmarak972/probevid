@@ -6,14 +6,18 @@ note: ""
 data:
   input_folder: data/navi_v1
   output_folder: data/navi_feats
-  model_name: videomae
+  model_name: videogpt
 model:
   feat_dim: [128,128,128,128]
   feat_size: 128
 batch_size: 1
+optimizer:
+  n_epochs: 10
+  probe_lr: 0.00001
+  model_lr: 0
 defaults:
   - optimizer: ten_epoch
-  - backbone: videomae
+  - backbone: videogpt
   - dataset: navi_feats
   - probe: depth_dpt
   - _self_

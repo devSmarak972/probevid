@@ -28,7 +28,7 @@ class VideoGPTFT(torch.nn.Module):
     ):
         super().__init__()
         assert output in ["gap", "dense"], "Only supports gap or dense output"
-
+        self.features = {}
         self.output = output
         self.checkpoint_name = model_id + f"_noise-{time_step}"
         self.patch_size = 16
@@ -55,6 +55,14 @@ class VideoGPTFT(torch.nn.Module):
 
         # define layer name (for logging)
         self.layer = "-".join(str(_x) for _x in self.multilayers)
+
+    def hook_fn(self, name):
+        def hook(module, input, output):
+            if isinstance(output, torch.Tensor):
+                # print(name,output.shape)
+                self.features[name] = output.detach()
+
+        return hook
 
     def process_images(self, batch_tensor, k=16):
         # Ensure input is a 4D tensor: (batch_size, channels, height, width)
@@ -102,8 +110,19 @@ class VideoGPTFT(torch.nn.Module):
         pixels = preprocess(img_tensor, self.resolution, self.sequence_length).to(
             self.device
         )
+        # Register hooks for each layer
+        for name, layer in self.model.named_modules():
+            # print(name)
+            layer.register_forward_hook(self.hook_fn(name))
+
         pixels = pixels.repeat(1, 4, 1, 1).unsqueeze(0)
         # print(pixels.shape)
         pixels = pixels.to(self.device)
         encodings = self.model.encode(pixels)
-        return encodings
+
+        # Print the shape of the output features from each layer
+        feat = []
+        for name, feature in self.features.items():
+            feat.append(feature)
+            # print(f"Layer: {name}, Feature shape: {feature.shape}")
+        return feat

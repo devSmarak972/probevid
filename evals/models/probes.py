@@ -219,7 +219,7 @@ class DPT(nn.Module):
         out = self.ref_1(feats[1], out)
         out = self.ref_0(feats[0], out)
 
-        out = interpolate(out, scale_factor=2)
+        out = interpolate(out, scale_factor=4)
         out = self.out_conv(out)
         out = interpolate(out, scale_factor=2)
         return out

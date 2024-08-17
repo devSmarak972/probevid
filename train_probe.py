@@ -20,6 +20,7 @@ from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.functional import interpolate
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LambdaLR
+from torch.utils.data import DataLoader, Dataset, Subset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -174,23 +175,7 @@ def interpolate_to_fixed_4d_list(tensors, target_shape=(1, 128, 64, 64)):
 
 
 def train_probe(probe, scale_invariant, loss_fn, target, feats):
-    pred = probe(feats)
-    pred = interpolate(pred, size=target.shape[-2:], mode="bilinear")
-
-    if scale_invariant:
-        pred = match_scale_and_shift(pred, target)
-        pred = pred.clamp(min=0.001, max=10.0)
-    # print(pred.shape,"predictions shape",target.shape)
-    # target=target.detach()
-    # pred=pred.detach()
-    # print(pred.shape,target.shape)
-    # pred.detach()
-    loss = loss_fn(pred, target)
-    # loss.detach()
-    # loss = Variable(loss.detach().data, requires_grad=True)
-
-    loss.backward()
-    return loss.item()
+    pass
 
 
 def ddp_setup(rank: int, world_size: int, port: int):
@@ -228,25 +213,43 @@ def train(
     writer=None,
 ):
     # for ep in range(1):
+    # Access the dataset from the existing DataLoader
+    # dataset = train_loader.dataset
+
+    # Calculate the number of samples for 20% of the data
+    # num_samples = int(0.4 * len(dataset))
+    # indices = np.random.choice(len(dataset), num_samples, replace=False)
+    # subset = Subset(dataset, indices)
+
     for ep in range(n_epochs):
         if world_size > 1:
             train_loader.sampler.set_epoch(ep)
 
         train_loss = 0
         torch.autograd.set_detect_anomaly(True)
+        dataset = train_loader.dataset
+        # dataset = subset
+        new_dataloader = DataLoader(
+            dataset,
+            batch_size=train_loader.batch_size,
+            shuffle=True,
+            num_workers=train_loader.num_workers,
+            pin_memory=train_loader.pin_memory,
+        )
 
         # feats=torch.empty()
         num_layers = 4
-        pbar = tqdm(train_loader) if rank == 0 else train_loader
+        # pbar = tqdm(train_loader) if rank == 0 else train_loader
+        pbar = tqdm(new_dataloader) if rank == 0 else new_dataloader
         # running_loss=0.0
         for i, batch in enumerate(pbar):
             # images = batch["image"].to(rank)
             feats = batch["feats"]
-            feats = [f.to(rank).float() for f in feats]
-            feats = interpolate_to_fixed_4d_list(
-                feats, (hidden_dim, feat_size, feat_size)
-            )
-            # print(len(feats),feats[0].shape)
+            feats = [f.to(rank).float().squeeze(1) for f in feats]
+            # feats = interpolate_to_fixed_4d_list(
+            #     feats, (hidden_dim, feat_size, feat_size)
+            # )
+            print(len(feats), feats[0].shape)
             # fs=[]
             # for feat in feats:
             #     k=int(np.prod(feat.size()))
@@ -274,8 +277,25 @@ def train(
             #    ----probe trained here--------------
             # print("feats",type(feats),feats.requires_grad)
             # feats = feats.to(rank)
-            # print(feats[0].shape)
-            loss = train_probe(probe, scale_invariant, loss_fn, target, feats)
+            print(feats[0].shape)
+            # probe.cuda()
+            # print(probe.device())
+
+            pred = probe(feats)
+            # probe.cpu()
+
+            pred = interpolate(pred, size=target.shape[-2:], mode="bilinear")
+
+            if scale_invariant:
+                pred = match_scale_and_shift(pred, target)
+                pred = pred.clamp(min=0.001, max=10.0)
+            # print(pred.shape,"predictions shape",target.shape)
+            loss = loss_fn(pred, target)
+            # loss.detach()
+
+            loss.backward()
+
+            # loss = train_probe(probe, scale_invariant, loss_fn, target, feats)
             # feats=feats.detach()
             optimizer.step()
             scheduler.step()
@@ -289,19 +309,18 @@ def train(
                 pbar.set_description(
                     f"{ep} | loss: {loss:.4f} ({_loss:.4f}) probe_lr: {pr_lr:.2e}"
                 )
-            running_loss += loss
             if i % 100 == 0:
                 if writer is not None:
                     writer.add_scalar(
-                        "training loss", running_loss / 100, ep * len(train_loader) + i
+                        "training loss", loss.item(), ep * len(train_loader) + i
                     )
-                    running_loss = 0.0
+                    # running_loss = 0.0
 
             # feats = feats.detach().cpu()
-            # if (i % 200) == 0:
-            #     print("Memory: ")
-            #     # print(target.numel(),"|",feats.numel(),"|",pred.numel())
-            #     print_memory_usage()
+            if (i % 200) == 0:
+                print("Memory: ")
+                #     # print(target.numel(),"|",feats.numel(),"|",pred.numel())
+                print_memory_usage()
             #     # print("After:")
             #     # print_memory_usage()
             #     gc.collect()
@@ -349,7 +368,7 @@ def validate(
             # images = batch["image"].cuda()
             feats = batch["feats"]
             feats = [f.cuda().float() for f in feats]
-            print("feat shape", feats[0].shape)
+            # print("feat shape", feats[0].shape)
             feats = interpolate_to_fixed_4d_list(
                 feats, (hidden_dim, feat_size, feat_size)
             )
@@ -476,7 +495,9 @@ def train_model(rank, world_size, cfg):
     )
     scheduler = LambdaLR(optimizer, lr_lambda=lambda_fn)
     loss_fn = DepthLoss()
-    writer = SummaryWriter(f"runs/experiment_{model_name}_{test_dset}_{train_dset}")
+    writer = SummaryWriter(
+        f"runs/experiment_{model_name}_{test_dset}_{train_dset}_{timestamp}"
+    )
 
     train(
         probe,
@@ -521,8 +542,10 @@ def train_model(rank, world_size, cfg):
 
         # log experiments
         exp_info = ", ".join([model_name] + probe_info + train_info)
-        log = f"{timestamp}, {exp_info}, {results_sa}, {results_si} \n"
+        log = f"{timestamp}, {exp_info}, SA_results(d1,d2,d3,rmse): {results_sa}, SI_results(d1,d2,d3,rmse) {results_si} \n"
         with open(f"depth_results_{test_dset}_{model_name}.log", "a") as f:
+            f.write(log)
+        with open(f"depth_results_{test_dset}.log", "a") as f:
             f.write(log)
 
         # save final model
