@@ -1,3 +1,4 @@
+import math
 import os
 
 import numpy as np
@@ -123,6 +124,92 @@ class VideoGPTFT(torch.nn.Module):
         # Print the shape of the output features from each layer
         feat = []
         for name, feature in self.features.items():
-            feat.append(feature)
-            # print(f"Layer: {name}, Feature shape: {feature.shape}")
+            # print(name)
+            # print(feature.shape)
+            feature = reshape_and_interpolate_to_fixed_shape(feature)
+            if feature is not None:
+                feat.append(feature)
+                # print(feature.shape)
+
+        feat = torch.cat(feat, dim=0)
+        # print(feat.shape)
+        # print("Num feat",len(feat))
+        # print(f"Layer: {name}, Feature shape: {feature.shape}")
+        # Calculate the size in bytes
+        # size_in_bytes = feat.element_size() * feat.nelement()
+
+        # Convert bytes to megabytes (1 MB = 1,048,576 bytes)
+        # size_in_mb = size_in_bytes / (1024 * 1024)
+        # print(size_in_mb)
         return feat
+
+
+import operator
+from functools import reduce
+
+import torch.nn.functional as F
+
+
+def reshape_and_interpolate_to_fixed_shape(tensor, target_shape=(480, 64, 64)):
+    target_total_size = reduce(operator.mul, target_shape)
+
+    # Reshape to a near shape (merge dimensions)
+    current_size = tensor.numel()
+    # if current_size == target_total_size:
+    #     tensor_reshaped = tensor.view(*target_shape)
+    # elif current_size > target_total_size:
+    #     factor = current_size // target_total_size
+    #     tensor_reshaped = tensor.view(factor, *target_shape).view(*target_shape)
+    # else:
+    #     # return None
+    #     # if len(tensor.shape) > 5:  # Assuming we have more than (N, C, H, W, D)
+    #     #     tensor = tensor.view(-1, *tensor.shape[-3:])
+
+    #     # # Ensure the tensor has the required format: (N, C, H, W) or (N, C, D1, D2, D3)
+    #     # if len(tensor.shape) == 3:
+    #     #     tensor = tensor.unsqueeze(1)  # Adding a channel dimension if necessary
+    #     # print(tensor.shape)
+    #     # # The tensor needs to be interpolated to match the target shape
+    #     # tensor_reshaped = tensor.view(1, 1, *tensor.shape).float()  # Add channels for interpolation
+    #     # print(tensor_reshaped.shape)
+    #     # tensor_reshaped = F.interpolate(tensor_reshaped, size=target_shape, mode='trilinear', align_corners=False)
+    #     # tensor_reshaped = tensor_reshaped.view(*target_shape)
+    height = tensor.size(-2)
+    width = tensor.size(-1)
+    if height != width:
+        return None
+    tensor = tensor.view(-1, tensor.size(-2), tensor.size(-1))
+    grid_size = int(math.sqrt(tensor.shape[0]))
+    channels = tensor.shape[0]
+    grid_size_w = grid_size
+    grid_size_h = grid_size
+    # print(tensor.shape)
+    if grid_size * grid_size != tensor.shape[0]:
+        # print(grid_size,tensor.shape[0])
+        grid_size_h = pow(2, int(math.log2(grid_size)) + 1)
+        grid_size_w = channels // grid_size_h
+
+    # Step 1: Reshape the tensor into a 4D tensor (grid_size, grid_size, height, width)
+    tensor = tensor.view(
+        grid_size_h, grid_size_w, height, width
+    )  # Shape: (grid_size, grid_size, height, width)
+
+    # Step 2: Permute the tensor to move the grid dimensions next to each other
+    tensor = tensor.permute(2, 0, 3, 1)  # Shape: (height, grid_size, width, grid_size)
+
+    # Step 3: Reshape the tensor to combine the grid into the height and width dimensions
+    tensor = tensor.contiguous().view(
+        height * grid_size_h, width * grid_size_w
+    )  # Shape: (height * grid_size, width * grid_size)
+
+    # Add a batch dimension if necessary
+    tensor = tensor.unsqueeze(0)  # Shape: (1, height * grid_size, width * grid_size)
+
+    # Now the tensor shape is [480, 32, 32]
+    # Step 2: Interpolate to the target shape [480, 64, 64]
+    tensor_reshaped = F.interpolate(
+        tensor.unsqueeze(0), size=(512, 480), mode="bilinear", align_corners=False
+    )
+    # tensor_reshaped=tensor
+    # print(tensor_reshaped.shape)
+    return tensor_reshaped

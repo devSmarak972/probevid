@@ -54,7 +54,7 @@ class NAVI(torch.utils.data.Dataset):
         pair_dataset=False,
         max_angle=120,
         relative_depth=False,
-        model_name="videomae",
+        model_name="videogpt",
     ):
         super().__init__()
 
@@ -76,6 +76,7 @@ class NAVI(torch.utils.data.Dataset):
 
         # set path
         self.data_root = Path(path + "/" + model_name)
+        print(self.data_root)
         self.img_root = Path(img_path)
         self.bbox_crop = bbox_crop
         self.relative_depth = relative_depth

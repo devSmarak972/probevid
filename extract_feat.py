@@ -57,7 +57,7 @@ def get_tensor_memory_usage(tensor):
     return tensor.element_size() * tensor.numel()
 
 
-def interpolate_to_fixed_4d_list(tensors, target_shape=(1, 128, 64, 64)):
+def interpolate_to_fixed_4d_list(tensors, target_shape=(1, 64, 512, 480)):
     """
     Interpolates 2D, 3D, or 4D tensors in a list to a fixed list of 4 4D tensors of shape (1, 128, 64, 64).
 
@@ -251,13 +251,13 @@ def extract(
     for dir in tqdm(os.listdir(input_folder), desc=f"Processing images"):
         subfolder_path = os.path.join(input_folder, dir)
         # print(dir)
-        for tdir in os.listdir(subfolder_path):
+        for tdir in tqdm(os.listdir(subfolder_path), desc="subfolder"):
             if "3d_scan" in tdir:
                 continue
             spath = os.path.join(subfolder_path, tdir, "images")
             if not os.path.exists(spath):
                 continue
-            for file in os.listdir(spath):
+            for file in tqdm(os.listdir(spath), desc="files"):
 
                 # print(file)
                 if file.endswith(".jpg"):
@@ -277,9 +277,9 @@ def extract(
                                 feats = feats.detach()
                     else:
                         feats = model(img)
-                    print(len(feats))
+                    # print(len(feats))
                     feats = [f.to(rank).float() for f in feats]
-                    print("Before: ", feats[0].shape)
+                    print("Before: ", len(feats), feats[0].shape)
                     feats = interpolate_to_fixed_4d_list(
                         feats, (hidden_dim, feat_size, feat_size)
                     )
@@ -288,7 +288,7 @@ def extract(
                     # print(output.shape)
                     # Create corresponding output subfolder structure
                     # relative_path = os.path.relpath(subfolder_path, phase_input_folder)
-                    output_subfolder = os.path.join(output_folder, dir, tdir)
+                    output_subfolder = os.path.join(output_folder, "test", dir, tdir)
                     # print(output_subfolder)
                     if not os.path.exists(output_subfolder):
                         os.makedirs(output_subfolder)
